@@ -158,6 +158,62 @@ class TestOpenGaussIndex:
         # The distance to itself should be 0, resulting in infinite score
         assert response.scores[0] == float("inf")
 
+    async def test_keyword_search(self, opengauss_index, sample_chunks, sample_embeddings):
+        """Test full-text keyword search returns relevant chunks."""
+        await opengauss_index.add_chunks(sample_chunks, sample_embeddings)
+
+        # Query for a term present in the first chunk
+        response = await opengauss_index.query_keyword(query_string="sky", k=3, score_threshold=0.0)
+
+        assert isinstance(response, QueryChunksResponse)
+        assert len(response.chunks) >= 1
+        assert any("sky" in chunk.content.lower() for chunk in response.chunks)
+
+        # Query for a term that doesn't exist
+        response_empty = await opengauss_index.query_keyword(
+            query_string="zzznomatchzzz", k=3, score_threshold=0.0
+        )
+        assert isinstance(response_empty, QueryChunksResponse)
+        assert len(response_empty.chunks) == 0
+
+    async def test_hybrid_search_rrf(self, opengauss_index, sample_chunks, sample_embeddings):
+        """Test hybrid search with RRF reranker combines vector and keyword results."""
+        await opengauss_index.add_chunks(sample_chunks, sample_embeddings)
+
+        query_embedding = sample_embeddings[0]
+        response = await opengauss_index.query_hybrid(
+            embedding=query_embedding,
+            query_string="sky",
+            k=3,
+            score_threshold=0.0,
+            reranker_type="rrf",
+            reranker_params={"impact_factor": 60.0},
+        )
+
+        assert isinstance(response, QueryChunksResponse)
+        assert len(response.chunks) >= 1
+        # Scores should be in descending order
+        assert all(response.scores[i] >= response.scores[i + 1] for i in range(len(response.scores) - 1))
+
+    async def test_hybrid_search_weighted(self, opengauss_index, sample_chunks, sample_embeddings):
+        """Test hybrid search with weighted reranker combines vector and keyword results."""
+        await opengauss_index.add_chunks(sample_chunks, sample_embeddings)
+
+        query_embedding = sample_embeddings[0]
+        response = await opengauss_index.query_hybrid(
+            embedding=query_embedding,
+            query_string="sky",
+            k=3,
+            score_threshold=0.0,
+            reranker_type="weighted",
+            reranker_params={"alpha": 0.5},
+        )
+
+        assert isinstance(response, QueryChunksResponse)
+        assert len(response.chunks) >= 1
+        # Scores should be in descending order
+        assert all(response.scores[i] >= response.scores[i + 1] for i in range(len(response.scores) - 1))
+
 
 class TestOpenGaussVectorIOAdapter:
     async def test_initialization(self, opengauss_adapter):

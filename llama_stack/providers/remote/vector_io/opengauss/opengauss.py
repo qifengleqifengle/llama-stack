@@ -27,6 +27,7 @@ from llama_stack.providers.utils.kvstore import kvstore_impl
 from llama_stack.providers.utils.kvstore.api import KVStore
 from llama_stack.providers.utils.memory.openai_vector_store_mixin import OpenAIVectorStoreMixin
 from llama_stack.providers.utils.memory.vector_store import (
+    RERANKER_TYPE_WEIGHTED,
     ChunkForDeletion,
     EmbeddingIndex,
     VectorDBWithIndex,
@@ -36,12 +37,63 @@ from .config import OpenGaussVectorIOConfig
 
 log = logging.getLogger(__name__)
 
-VERSION = "v3"
+VERSION = "v4"
 VECTOR_DBS_PREFIX = f"vector_dbs:opengauss:{VERSION}::"
 VECTOR_INDEX_PREFIX = f"vector_index:opengauss:{VERSION}::"
 OPENAI_VECTOR_STORES_PREFIX = f"openai_vector_stores:opengauss:{VERSION}::"
 OPENAI_VECTOR_STORES_FILES_PREFIX = f"openai_vector_stores_files:opengauss:{VERSION}::"
 OPENAI_VECTOR_STORES_FILES_CONTENTS_PREFIX = f"openai_vector_stores_files_contents:opengauss:{VERSION}::"
+
+
+def _normalize_scores(scores: dict[str, float]) -> dict[str, float]:
+    """Normalize scores to [0,1] range using min-max normalization."""
+    if not scores:
+        return {}
+    min_score = min(scores.values())
+    max_score = max(scores.values())
+    score_range = max_score - min_score
+    if score_range > 0:
+        return {doc_id: (score - min_score) / score_range for doc_id, score in scores.items()}
+    return dict.fromkeys(scores, 1.0)
+
+
+def _weighted_rerank(
+    vector_scores: dict[str, float],
+    keyword_scores: dict[str, float],
+    alpha: float = 0.5,
+) -> dict[str, float]:
+    """ReRanker that uses weighted average of scores."""
+    all_ids = set(vector_scores.keys()) | set(keyword_scores.keys())
+    normalized_vector_scores = _normalize_scores(vector_scores)
+    normalized_keyword_scores = _normalize_scores(keyword_scores)
+
+    return {
+        doc_id: (alpha * normalized_keyword_scores.get(doc_id, 0.0))
+        + ((1 - alpha) * normalized_vector_scores.get(doc_id, 0.0))
+        for doc_id in all_ids
+    }
+
+
+def _rrf_rerank(
+    vector_scores: dict[str, float],
+    keyword_scores: dict[str, float],
+    impact_factor: float = 60.0,
+) -> dict[str, float]:
+    """ReRanker that uses Reciprocal Rank Fusion."""
+    vector_ranks = {
+        doc_id: i + 1 for i, (doc_id, _) in enumerate(sorted(vector_scores.items(), key=lambda x: x[1], reverse=True))
+    }
+    keyword_ranks = {
+        doc_id: i + 1 for i, (doc_id, _) in enumerate(sorted(keyword_scores.items(), key=lambda x: x[1], reverse=True))
+    }
+
+    all_ids = set(vector_scores.keys()) | set(keyword_scores.keys())
+    rrf_scores = {}
+    for doc_id in all_ids:
+        vector_rank = vector_ranks.get(doc_id, float("inf"))
+        keyword_rank = keyword_ranks.get(doc_id, float("inf"))
+        rrf_scores[doc_id] = (1.0 / (impact_factor + vector_rank)) + (1.0 / (impact_factor + keyword_rank))
+    return rrf_scores
 
 
 def upsert_models(conn, keys_models: list[tuple[str, BaseModel]]):
@@ -81,8 +133,17 @@ class OpenGaussIndex(EmbeddingIndex):
                 CREATE TABLE IF NOT EXISTS {self.table_name} (
                     id TEXT PRIMARY KEY,
                     document JSONB,
-                    embedding vector({dimension})
+                    embedding vector({dimension}),
+                    content_tsv tsvector GENERATED ALWAYS AS (
+                        to_tsvector('english', COALESCE((document->>'content')::text, ''))
+                    ) STORED
                 )
+            """
+            )
+            cur.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS {self.table_name}_tsv_idx
+                ON {self.table_name} USING GIN(content_tsv)
             """
             )
 
@@ -145,7 +206,29 @@ class OpenGaussIndex(EmbeddingIndex):
         k: int,
         score_threshold: float,
     ) -> QueryChunksResponse:
-        raise NotImplementedError("Keyword search is not supported in OpenGauss")
+        with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT document, ts_rank(content_tsv, plainto_tsquery('english', %s)) AS score
+                FROM {self.table_name}
+                WHERE content_tsv @@ plainto_tsquery('english', %s)
+                ORDER BY score DESC
+                LIMIT %s
+                """,
+                (query_string, query_string, k),
+            )
+            results = cur.fetchall()
+
+            chunks = []
+            scores = []
+            for doc, score in results:
+                score = float(score)
+                if score < score_threshold:
+                    continue
+                chunks.append(Chunk(**doc))
+                scores.append(score)
+
+            return QueryChunksResponse(chunks=chunks, scores=scores)
 
     async def query_hybrid(
         self,
@@ -156,7 +239,42 @@ class OpenGaussIndex(EmbeddingIndex):
         reranker_type: str,
         reranker_params: dict[str, Any] | None = None,
     ) -> QueryChunksResponse:
-        raise NotImplementedError("Hybrid search is not supported in OpenGauss")
+        if reranker_params is None:
+            reranker_params = {}
+
+        vector_response = await self.query_vector(embedding, k, score_threshold)
+        keyword_response = await self.query_keyword(query_string, k, score_threshold)
+
+        vector_scores = {
+            chunk.chunk_id: score
+            for chunk, score in zip(vector_response.chunks, vector_response.scores, strict=False)
+        }
+        keyword_scores = {
+            chunk.chunk_id: score
+            for chunk, score in zip(keyword_response.chunks, keyword_response.scores, strict=False)
+        }
+
+        if reranker_type == RERANKER_TYPE_WEIGHTED:
+            alpha = reranker_params.get("alpha", 0.5)
+            combined_scores = _weighted_rerank(vector_scores, keyword_scores, alpha)
+        else:
+            impact_factor = reranker_params.get("impact_factor", 60.0)
+            combined_scores = _rrf_rerank(vector_scores, keyword_scores, impact_factor)
+
+        sorted_items = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
+        top_k_items = sorted_items[:k]
+        filtered_items = [(doc_id, score) for doc_id, score in top_k_items if score >= score_threshold]
+
+        chunk_map = {c.chunk_id: c for c in vector_response.chunks + keyword_response.chunks}
+
+        chunks = []
+        scores = []
+        for doc_id, score in filtered_items:
+            if doc_id in chunk_map:
+                chunks.append(chunk_map[doc_id])
+                scores.append(score)
+
+        return QueryChunksResponse(chunks=chunks, scores=scores)
 
     async def delete(self):
         with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
