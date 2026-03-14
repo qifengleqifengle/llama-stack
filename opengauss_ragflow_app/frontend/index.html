@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>知识库对话台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-badge">R</div>
+          <div class="brand-copy">
+            <p class="brand-kicker">RAG Workspace</p>
+            <h1>知识库与引用对话</h1>
+          </div>
+        </div>
+
+        <div class="context-strip">
+          <div class="context-chip">
+            <span>当前知识库</span>
+            <strong id="current-kb-label">尚未选择</strong>
+          </div>
+          <button id="refresh-bootstrap" class="ghost-button">刷新</button>
+        </div>
+      </header>
+
+      <nav class="tabbar" aria-label="主导航">
+        <button class="tab-button active" data-tab="knowledge">知识库</button>
+        <button class="tab-button" data-tab="files">文件导入</button>
+        <button class="tab-button" data-tab="chat">对话</button>
+      </nav>
+
+      <div id="feedback" class="feedback hidden"></div>
+
+      <main class="workspace">
+        <section id="tab-knowledge" class="tab-panel active">
+          <div class="grid-two">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">知识库创建</p>
+                  <h2>新建与切换知识库</h2>
+                </div>
+              </div>
+              <form id="kb-form" class="form-card">
+                <label>
+                  知识库名称
+                  <input id="kb-name" name="name" placeholder="例如：产品知识库" required />
+                </label>
+                <label>
+                  向量库 ID
+                  <input id="kb-id" name="vector_db_id" placeholder="可选，不填自动生成" />
+                </label>
+                <label>
+                  向量模型
+                  <select id="kb-embedding-model" name="embedding_model"></select>
+                </label>
+                <button type="submit" class="primary-button">创建知识库</button>
+              </form>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">知识库列表</p>
+                  <h2>当前可用知识库</h2>
+                </div>
+              </div>
+              <div id="kb-list" class="stack-list"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">知识内容</p>
+                <h2>当前知识库文档</h2>
+              </div>
+            </div>
+            <div id="knowledge-document-list" class="stack-list"></div>
+          </div>
+
+        </section>
+
+        <section id="tab-files" class="tab-panel">
+          <div class="grid-two">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">文件导入</p>
+                  <h2>向当前知识库添加文件</h2>
+                </div>
+              </div>
+              <form id="upload-doc-form" class="form-card">
+                <div class="file-picker">
+                  <button id="upload-doc-trigger" type="button" class="ghost-button">选择文件</button>
+                  <input id="upload-doc-files" type="file" multiple />
+                  <div id="upload-doc-selection" class="document-meta">尚未选择文件</div>
+                </div>
+                <label>
+                  分块大小
+                  <input id="upload-doc-chunk-size" type="number" min="64" max="4096" value="512" />
+                </label>
+                <button type="submit" class="primary-button">解析并导入文件</button>
+              </form>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">文件列表</p>
+                  <h2>当前知识库内容</h2>
+                </div>
+              </div>
+              <div id="file-document-list" class="stack-list"></div>
+            </div>
+          </div>
+
+        </section>
+
+        <section id="tab-chat" class="tab-panel">
+          <div class="panel slim-context-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">对话上下文</p>
+                <h2>当前选中知识库就是会话上下文</h2>
+              </div>
+              <button id="new-chat-session" class="ghost-button">清空会话</button>
+            </div>
+            <div class="context-tile">
+              <span>知识库</span>
+              <strong id="chat-kb-summary">尚未选择知识库</strong>
+            </div>
+          </div>
+
+          <div class="chat-grid">
+            <div class="panel chat-config-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">会话配置</p>
+                  <h2>创建对话会话</h2>
+                </div>
+              </div>
+              <form id="chat-config-form" class="form-card">
+                <label>
+                  对话模型
+                  <select id="chat-model"></select>
+                </label>
+                <label>
+                  系统指令
+                  <textarea id="chat-instructions" rows="4">你是一个基于检索结果作答的助手。请优先使用检索出的知识片段，回答要简洁，并准确引用已命中的内容。</textarea>
+                </label>
+                <div class="inline-grid">
+                  <label>
+                    模式
+                    <select id="chat-mode">
+                      <option value="hybrid">hybrid</option>
+                      <option value="vector">vector</option>
+                      <option value="keyword">keyword</option>
+                    </select>
+                  </label>
+                  <label>
+                    返回片段
+                    <input id="chat-max-chunks" type="number" min="1" max="20" value="5" />
+                  </label>
+                  <label>
+                    重排
+                    <select id="chat-ranker">
+                      <option value="rrf">rrf</option>
+                      <option value="weighted">weighted</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="inline-grid">
+                  <label>
+                    Alpha
+                    <input id="chat-alpha" type="number" min="0" max="1" step="0.05" value="0.6" />
+                  </label>
+                  <label>
+                    Impact
+                    <input id="chat-impact" type="number" min="1" step="1" value="60" />
+                  </label>
+                </div>
+                <button type="submit" class="primary-button">创建会话</button>
+              </form>
+            </div>
+
+            <div class="panel chat-window-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">对话面板</p>
+                  <h2>引用式回答</h2>
+                </div>
+              </div>
+              <div class="chat-panel">
+                <div id="chat-transcript" class="chat-transcript"></div>
+                <form id="chat-message-form" class="chat-composer">
+                  <textarea id="chat-message" rows="4" placeholder="输入一个基于当前知识库的问题"></textarea>
+                  <button type="submit" class="primary-button">发送问题</button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="chunk-modal" class="modal hidden" aria-hidden="true">
+      <div id="chunk-modal-backdrop" class="modal-backdrop"></div>
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="chunk-modal-title">
+        <div class="modal-header">
+          <div>
+            <p id="preview-modal-kicker" class="eyebrow">内容预览</p>
+            <h2 id="chunk-modal-title">查看切块结果</h2>
+          </div>
+          <button id="chunk-modal-close" class="ghost-button" type="button">关闭</button>
+        </div>
+        <div id="chunk-modal-body" class="modal-body"></div>
+      </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -40,6 +40,7 @@ class EmbeddingModelInfo:
 EMBEDDING_MODEL_IDS: dict[str, EmbeddingModelInfo] = {
     "text-embedding-3-small": EmbeddingModelInfo(1536, 8192),
     "text-embedding-3-large": EmbeddingModelInfo(3072, 8192),
+    "Qwen/Qwen3-Embedding-0.6B": EmbeddingModelInfo(1024, 32768),
 }
 SAFETY_MODELS_ENTRIES = []
 

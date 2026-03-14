@@ -109,6 +109,12 @@ class LiteLLMOpenAIMixin(
     def get_litellm_model_name(self, model_id: str) -> str:
         # users may be using openai/ prefix in their model names. the openai/models.py did this by default.
         # model_id.startswith("openai/") is for backwards compatibility.
+        #
+        # For OpenAI-compatible providers such as SiliconFlow, non-OpenAI models are
+        # addressed by their raw provider ids (for example "Qwen/Qwen3-Embedding-0.6B"),
+        # not "openai/<model>". Prefixing those model ids causes 400s on embeddings.
+        if "/" in model_id and not model_id.startswith(f"{self.litellm_provider_name}/"):
+            return model_id
         return (
             f"{self.litellm_provider_name}/{model_id}"
             if self.is_openai_compat and not model_id.startswith(self.litellm_provider_name)

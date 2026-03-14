@@ -22,6 +22,8 @@ class PGVectorVectorIOConfig(BaseModel):
     db: str | None = Field(default="postgres")
     user: str | None = Field(default="postgres")
     password: str | None = Field(default="mysecretpassword")
+    connect_timeout: int = Field(default=5, ge=1, le=300)
+    fts_config: str = Field(default="english")
     kvstore: KVStoreConfig | None = Field(description="Config for KV store backend (SQLite only for now)", default=None)
 
     @classmethod
@@ -33,6 +35,8 @@ class PGVectorVectorIOConfig(BaseModel):
         db: str = "${env.PGVECTOR_DB}",
         user: str = "${env.PGVECTOR_USER}",
         password: str = "${env.PGVECTOR_PASSWORD}",
+        connect_timeout: str = "${env.PGVECTOR_CONNECT_TIMEOUT:=5}",
+        fts_config: str = "${env.PGVECTOR_FTS_CONFIG:=english}",
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {
@@ -41,6 +45,8 @@ class PGVectorVectorIOConfig(BaseModel):
             "db": db,
             "user": user,
             "password": password,
+            "connect_timeout": connect_timeout,
+            "fts_config": fts_config,
             "kvstore": SqliteKVStoreConfig.sample_run_config(
                 __distro_dir__=__distro_dir__,
                 db_name="pgvector_registry.db",

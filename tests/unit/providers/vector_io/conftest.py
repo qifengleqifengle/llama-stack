@@ -369,12 +369,12 @@ async def opengauss_vec_index(embedding_dimension, opengauss_vec_db_path):
 
         real_conn = psycopg2.connect(**opengauss_vec_db_path)
         real_conn.autocommit = True
-        index = OpenGaussIndex(vector_db, embedding_dimension, real_conn)
+        index = OpenGaussIndex(vector_db, embedding_dimension, real_conn, OpenGaussVectorIOConfig())
         yield index
         await index.delete()
         real_conn.close()
     else:
-        index = OpenGaussIndex(vector_db, embedding_dimension, mock_conn)
+        index = OpenGaussIndex(vector_db, embedding_dimension, mock_conn, OpenGaussVectorIOConfig())
         yield index
 
 

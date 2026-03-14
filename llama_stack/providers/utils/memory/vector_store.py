@@ -52,6 +52,36 @@ RERANKER_TYPE_RRF = "rrf"
 RERANKER_TYPE_WEIGHTED = "weighted"
 
 
+def _resolve_reranker(ranker: Any) -> tuple[str, dict[str, Any]]:
+    """Normalize ranker config from either the public schema or legacy internal shapes."""
+    if ranker is None:
+        return RERANKER_TYPE_RRF, {"impact_factor": 60.0}
+
+    if isinstance(ranker, BaseModel):
+        ranker_data = ranker.model_dump()
+    elif hasattr(ranker, "model_dump"):
+        ranker_data = ranker.model_dump()
+    elif isinstance(ranker, dict):
+        ranker_data = ranker
+    else:
+        raise ValueError(f"Unsupported ranker config type: {type(ranker)}")
+
+    ranker_type = ranker_data.get("type")
+    if ranker_type == RERANKER_TYPE_WEIGHTED:
+        return RERANKER_TYPE_WEIGHTED, {"alpha": ranker_data.get("alpha", 0.5)}
+    if ranker_type == RERANKER_TYPE_RRF:
+        return RERANKER_TYPE_RRF, {"impact_factor": ranker_data.get("impact_factor", 60.0)}
+
+    # Legacy/internal shape support: {"strategy": "...", "params": {...}}
+    strategy = ranker_data.get("strategy", RERANKER_TYPE_RRF)
+    params = ranker_data.get("params", {})
+    if strategy == RERANKER_TYPE_WEIGHTED:
+        weights = params.get("weights", [0.5, 0.5])
+        return RERANKER_TYPE_WEIGHTED, {"alpha": weights[0] if len(weights) > 0 else 0.5}
+
+    return RERANKER_TYPE_RRF, {"impact_factor": params.get("k", 60.0)}
+
+
 def parse_pdf(data: bytes) -> str:
     # For PDF and DOC/DOCX files, we can't reliably convert to string
     pdf_bytes = io.BytesIO(data)
@@ -315,20 +345,7 @@ class VectorDBWithIndex:
         mode = params.get("mode")
         score_threshold = params.get("score_threshold", 0.0)
 
-        ranker = params.get("ranker")
-        if ranker is None:
-            reranker_type = RERANKER_TYPE_RRF
-            reranker_params = {"impact_factor": 60.0}
-        else:
-            strategy = ranker.get("strategy", "rrf")
-            if strategy == "weighted":
-                weights = ranker.get("params", {}).get("weights", [0.5, 0.5])
-                reranker_type = RERANKER_TYPE_WEIGHTED
-                reranker_params = {"alpha": weights[0] if len(weights) > 0 else 0.5}
-            else:
-                reranker_type = RERANKER_TYPE_RRF
-                k_value = ranker.get("params", {}).get("k", 60.0)
-                reranker_params = {"impact_factor": k_value}
+        reranker_type, reranker_params = _resolve_reranker(params.get("ranker"))
 
         query_string = interleaved_content_as_str(query)
         if mode == "keyword":

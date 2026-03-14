@@ -396,13 +396,16 @@ See [Chroma's documentation](https://docs.trychroma.com/docs/overview/introducti
                 config_class="llama_stack.providers.remote.vector_io.pgvector.PGVectorVectorIOConfig",
                 description="""
 [PGVector](https://github.com/pgvector/pgvector) is a remote vector database provider for Llama Stack. It
-allows you to store and query vectors directly in memory.
-That means you'll get fast and efficient vector retrieval.
+stores vectors and document content in PostgreSQL with the pgvector extension.
 
 ## Features
 
 - Easy to use
 - Fully integrated with Llama Stack
+- Vector search with pgvector
+- Keyword search with PostgreSQL full-text search and GIN
+- Hybrid search with reranking across vector and keyword retrieval
+- Content and embeddings stored together in PostgreSQL
 
 ## Usage
 
@@ -463,6 +466,7 @@ See [OpenGauss' documentation](https://docs.opengauss.org/en/docs/5.0.0/docs/Get
 """,
             ),
             api_dependencies=[Api.inference],
+            optional_api_dependencies=[Api.files],
         ),
         remote_provider_spec(
             Api.vector_io,

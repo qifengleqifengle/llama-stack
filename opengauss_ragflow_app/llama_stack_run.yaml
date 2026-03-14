@@ -1,0 +1,71 @@
+version: 2
+image_name: opengauss-ragflow-stack
+
+apis:
+- files
+- inference
+- tool_runtime
+- vector_io
+
+providers:
+  inference:
+  - provider_id: openai
+    provider_type: remote::openai
+    config:
+      api_key: ${env.OPENAI_API_KEY:=}
+      base_url: ${env.OPENAI_BASE_URL:=http://localhost:8000/v1}
+
+  vector_io:
+  - provider_id: remote::pgvector
+    provider_type: remote::pgvector
+    config:
+      host: ${env.PGVECTOR_HOST:=localhost}
+      port: ${env.PGVECTOR_PORT:=5432}
+      db: ${env.PGVECTOR_DB:=postgres}
+      user: ${env.PGVECTOR_USER:=postgres}
+      password: ${env.PGVECTOR_PASSWORD:=}
+      connect_timeout: ${env.PGVECTOR_CONNECT_TIMEOUT:=5}
+      fts_config: ${env.PGVECTOR_FTS_CONFIG:=english}
+      kvstore:
+        type: sqlite
+        db_path: ${env.SQLITE_STORE_DIR:=~/.llama/distributions/opengauss-add}/pgvector_registry.db
+
+  files:
+  - provider_id: meta-reference-files
+    provider_type: inline::localfs
+    config:
+      storage_dir: ${env.FILES_STORAGE_DIR:=~/.llama/distributions/opengauss-add/files}
+      metadata_store:
+        type: sqlite
+        db_path: ${env.SQLITE_STORE_DIR:=~/.llama/distributions/opengauss-add}/files_metadata.db
+
+  tool_runtime:
+  - provider_id: rag-runtime
+    provider_type: inline::rag-runtime
+
+metadata_store:
+  type: sqlite
+  db_path: ${env.SQLITE_STORE_DIR:=~/.llama/distributions/opengauss-add}/registry.db
+
+inference_store:
+  type: sqlite
+  db_path: ${env.SQLITE_STORE_DIR:=~/.llama/distributions/opengauss-add}/inference_store.db
+
+models:
+- metadata:
+    embedding_dimension: ${env.LLAMA_STACK_EMBEDDING_DIMENSION:=1024}
+  model_id: ${env.LLAMA_STACK_EMBEDDING_MODEL:=Qwen/Qwen3-Embedding-0.6B}
+  provider_id: openai
+  model_type: embedding
+
+vector_dbs: []
+datasets: []
+scoring_fns: []
+benchmarks: []
+
+tool_groups:
+- toolgroup_id: builtin::rag
+  provider_id: rag-runtime
+
+server:
+  port: 8321

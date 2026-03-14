@@ -112,7 +112,11 @@ async def opengauss_connection():
 @pytest.fixture
 async def opengauss_index(opengauss_connection, vector_db):
     """Fixture to create and clean up an OpenGaussIndex instance."""
-    index = OpenGaussIndex(vector_db, vector_db.embedding_dimension, opengauss_connection)
+    index = OpenGaussIndex(
+        vector_db,
+        vector_db.embedding_dimension,
+        OpenGaussVectorIOConfig(),
+    )
     yield index
     await index.delete()
 
@@ -131,12 +135,11 @@ async def opengauss_adapter(mock_inference_api):
     adapter = OpenGaussVectorIOAdapter(config, mock_inference_api)
     await adapter.initialize()
     yield adapter
-    if adapter.conn and not adapter.conn.closed:
-        for db_id in list(adapter.cache.keys()):
-            try:
-                await adapter.unregister_vector_db(db_id)
-            except Exception as e:
-                print(f"Error during cleanup of {db_id}: {e}")
+    for db_id in list(adapter.cache.keys()):
+        try:
+            await adapter.unregister_vector_db(db_id)
+        except Exception as e:
+            print(f"Error during cleanup of {db_id}: {e}")
     await adapter.shutdown()
     # Clean up the sqlite db file
     if os.path.exists("opengauss_test.db"):
@@ -158,33 +161,83 @@ class TestOpenGaussIndex:
         # The distance to itself should be 0, resulting in infinite score
         assert response.scores[0] == float("inf")
 
+    async def test_keyword_search(self, opengauss_index, sample_chunks, sample_embeddings):
+        """Test FTS keyword search returns relevant chunks."""
+        await opengauss_index.add_chunks(sample_chunks, sample_embeddings)
+
+        response = await opengauss_index.query_keyword(query_string="sky", k=3, score_threshold=0.0)
+
+        assert isinstance(response, QueryChunksResponse)
+        assert len(response.chunks) >= 1
+        assert any("sky" in chunk.content.lower() for chunk in response.chunks)
+
+    async def test_hybrid_search_rrf(self, opengauss_index, sample_chunks, sample_embeddings):
+        """Test hybrid search with RRF reranking combines vector and FTS results."""
+        await opengauss_index.add_chunks(sample_chunks, sample_embeddings)
+
+        response = await opengauss_index.query_hybrid(
+            embedding=sample_embeddings[0],
+            query_string="sky",
+            k=3,
+            score_threshold=0.0,
+            reranker_type="rrf",
+            reranker_params={"impact_factor": 60.0},
+        )
+
+        assert isinstance(response, QueryChunksResponse)
+        assert len(response.chunks) >= 1
+        assert response.chunks[0].content == sample_chunks[0].content
+
+    async def test_hybrid_search_weighted(self, opengauss_index, sample_chunks, sample_embeddings):
+        """Test hybrid search with weighted reranking combines vector and FTS results."""
+        await opengauss_index.add_chunks(sample_chunks, sample_embeddings)
+
+        response = await opengauss_index.query_hybrid(
+            embedding=sample_embeddings[0],
+            query_string="sky",
+            k=3,
+            score_threshold=0.0,
+            reranker_type="weighted",
+            reranker_params={"alpha": 0.7},
+        )
+
+        assert isinstance(response, QueryChunksResponse)
+        assert len(response.chunks) >= 1
+        assert response.chunks[0].content == sample_chunks[0].content
+
 
 class TestOpenGaussVectorIOAdapter:
     async def test_initialization(self, opengauss_adapter):
         """Test that the adapter initializes and connects to the database."""
-        assert opengauss_adapter.conn is not None
-        assert not opengauss_adapter.conn.closed
+        assert opengauss_adapter.kvstore is not None
 
-    async def test_register_and_unregister_vector_db(self, opengauss_adapter, vector_db):
+    async def test_register_and_unregister_vector_db(self, opengauss_adapter, opengauss_connection, vector_db):
         """Test the registration and unregistration of a vector database."""
         await opengauss_adapter.register_vector_db(vector_db)
         assert vector_db.identifier in opengauss_adapter.cache
 
-        table_name = opengauss_adapter.cache[vector_db.identifier].index.table_name
-        with opengauss_adapter.conn.cursor() as cur:
+        index = opengauss_adapter.cache[vector_db.identifier].index
+        vector_table_name = index.vector_table_name
+        fts_index_name = index.fts_index_name
+        with opengauss_connection.cursor() as cur:
             cur.execute(
                 "SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = %s);",
-                (table_name,),
+                (vector_table_name,),
+            )
+            assert cur.fetchone()[0]
+            cur.execute(
+                "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = %s AND indexname = %s);",
+                (vector_table_name, fts_index_name),
             )
             assert cur.fetchone()[0]
 
         await opengauss_adapter.unregister_vector_db(vector_db.identifier)
         assert vector_db.identifier not in opengauss_adapter.cache
 
-        with opengauss_adapter.conn.cursor() as cur:
+        with opengauss_connection.cursor() as cur:
             cur.execute(
                 "SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = %s);",
-                (table_name,),
+                (vector_table_name,),
             )
             assert not cur.fetchone()[0]
 

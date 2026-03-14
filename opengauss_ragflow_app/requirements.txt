@@ -1,0 +1,7 @@
+fastapi
+httpx
+llama-stack-client
+python-dotenv
+python-multipart
+socksio
+uvicorn

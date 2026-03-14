@@ -6,6 +6,8 @@
 
 import logging
 
+from llama_stack.apis.inference import EmbeddingsResponse, EmbeddingTaskType, TextTruncation
+from llama_stack.providers.utils.inference.prompt_adapter import interleaved_content_as_str
 from llama_stack.providers.utils.inference.litellm_openai_mixin import LiteLLMOpenAIMixin
 from llama_stack.providers.utils.inference.openai_mixin import OpenAIMixin
 
@@ -74,3 +76,18 @@ class OpenAIInferenceAdapter(OpenAIMixin, LiteLLMOpenAIMixin):
 
     async def shutdown(self) -> None:
         await super().shutdown()
+
+    async def embeddings(
+        self,
+        model_id: str,
+        contents: list[str] | list,
+        text_truncation: TextTruncation | None = TextTruncation.none,
+        output_dimension: int | None = None,
+        task_type: EmbeddingTaskType | None = None,
+    ) -> EmbeddingsResponse:
+        model = await self.model_store.get_model(model_id)
+        response = await self.client.embeddings.create(
+            model=model.provider_resource_id,
+            input=[interleaved_content_as_str(content) for content in contents],
+        )
+        return EmbeddingsResponse(embeddings=[data.embedding for data in response.data])

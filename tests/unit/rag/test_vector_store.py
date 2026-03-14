@@ -13,11 +13,13 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
+from llama_stack.apis.tools import RRFRanker, WeightedRanker
 from llama_stack.apis.tools import RAGDocument
 from llama_stack.apis.vector_io import Chunk
 from llama_stack.providers.utils.memory.vector_store import (
     URL,
     VectorDBWithIndex,
+    _resolve_reranker,
     _validate_embedding,
     content_from_doc,
     make_overlapped_chunks,
@@ -227,6 +229,28 @@ class TestVectorDBWithIndex:
         args = mock_index.add_chunks.call_args[0]
         assert args[0] == chunks
         assert np.array_equal(args[1], np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype=np.float32))
+
+
+class TestResolveReranker:
+    def test_resolves_public_rrf_schema(self):
+        reranker_type, reranker_params = _resolve_reranker(RRFRanker(impact_factor=42.0))
+
+        assert reranker_type == "rrf"
+        assert reranker_params == {"impact_factor": 42.0}
+
+    def test_resolves_public_weighted_schema(self):
+        reranker_type, reranker_params = _resolve_reranker(WeightedRanker(alpha=0.7))
+
+        assert reranker_type == "weighted"
+        assert reranker_params == {"alpha": 0.7}
+
+    def test_resolves_legacy_schema(self):
+        reranker_type, reranker_params = _resolve_reranker(
+            {"strategy": "weighted", "params": {"weights": [0.8, 0.2]}}
+        )
+
+        assert reranker_type == "weighted"
+        assert reranker_params == {"alpha": 0.8}
 
     async def test_insert_chunks_with_valid_embeddings(self):
         mock_vector_db = MagicMock()
