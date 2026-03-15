@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 SearchMode = Literal["vector", "keyword", "hybrid"]
 RankerType = Literal["rrf", "weighted"]
+ChunkingStrategy = Literal["mineru_markdown", "fixed_tokens", "fixed_chars", "recursive"]
 
 
 class ModelInfo(BaseModel):
@@ -43,6 +44,7 @@ class BootstrapResponse(BaseModel):
     openai_base_url: str
     mineru_base_url: str
     default_provider_id: str
+    default_query_rewrite: bool = False
     default_chat_model_id: str | None = None
     default_embedding_model_id: str | None = None
     embedding_models: list[ModelInfo]
@@ -70,18 +72,23 @@ class TextDocumentInput(BaseModel):
 
 class TextIngestRequest(BaseModel):
     documents: list[TextDocumentInput]
+    chunking_strategy: ChunkingStrategy = "fixed_tokens"
     chunk_size_in_tokens: int = Field(default=512, ge=64, le=4096)
+    chunk_size_in_chars: int = Field(default=1200, ge=200, le=12000)
 
 
 class UrlIngestRequest(BaseModel):
     urls: list[str] = Field(min_length=1)
+    chunking_strategy: ChunkingStrategy = "mineru_markdown"
     chunk_size_in_tokens: int = Field(default=512, ge=64, le=4096)
+    chunk_size_in_chars: int = Field(default=1200, ge=200, le=12000)
 
 
 class RetrievalRequest(BaseModel):
     vector_db_id: str
     query: str = Field(min_length=1)
     mode: SearchMode = "hybrid"
+    query_rewrite: bool = False
     max_chunks: int = Field(default=6, ge=1, le=20)
     score_threshold: float = Field(default=0.0, ge=0.0)
     ranker_type: RankerType = "rrf"
@@ -110,6 +117,7 @@ class CreateChatSessionRequest(BaseModel):
         default="You are a grounded assistant. Use the retrieved knowledge base results and cite them faithfully."
     )
     mode: SearchMode = "hybrid"
+    query_rewrite: bool = False
     max_chunks: int = Field(default=5, ge=1, le=20)
     ranker_type: RankerType = "rrf"
     alpha: float = Field(default=0.6, ge=0.0, le=1.0)
@@ -121,6 +129,7 @@ class ChatSessionInfo(BaseModel):
     vector_db_id: str
     model_id: str
     mode: SearchMode
+    query_rewrite: bool = False
     max_chunks: int
     ranker_type: RankerType
 

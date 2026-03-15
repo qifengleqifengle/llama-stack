@@ -1,0 +1,1 @@
+{"id":"demo-1","vector_db_id":"pgvector-demo","question_type":"procedural","question":"How does hybrid retrieval work in this demo?","gold_document_ids":["doc_9c4e676fd6"],"gold_answer":"Hybrid retrieval combines vector recall and keyword recall with reranking.","query_rewrite":false,"mode":"hybrid","max_chunks":5,"ranker_type":"rrf","alpha":0.6,"impact_factor":60}

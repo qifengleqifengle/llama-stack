@@ -5,45 +5,70 @@ const state = {
   selectedDocumentId: null,
   selectedDocumentTitle: null,
   chatSessionId: null,
+  chatSessionKbId: null,
+  statusTimer: null,
 };
 
 const els = {
-  feedback: document.getElementById("feedback"),
   currentKbLabel: document.getElementById("current-kb-label"),
-  chatKbSummary: document.getElementById("chat-kb-summary"),
-  refreshBootstrap: document.getElementById("refresh-bootstrap"),
+  openKbModal: document.getElementById("open-kb-modal"),
+  openUploadModal: document.getElementById("open-upload-modal"),
   kbForm: document.getElementById("kb-form"),
   kbName: document.getElementById("kb-name"),
   kbId: document.getElementById("kb-id"),
   kbEmbeddingModel: document.getElementById("kb-embedding-model"),
   kbList: document.getElementById("kb-list"),
   knowledgeDocumentList: document.getElementById("knowledge-document-list"),
-  fileDocumentList: document.getElementById("file-document-list"),
   uploadDocForm: document.getElementById("upload-doc-form"),
   uploadDocFiles: document.getElementById("upload-doc-files"),
   uploadDocTrigger: document.getElementById("upload-doc-trigger"),
   uploadDocSelection: document.getElementById("upload-doc-selection"),
-  chatConfigForm: document.getElementById("chat-config-form"),
+  uploadDocStrategy: document.getElementById("upload-doc-strategy"),
+  uploadDocChunkSize: document.getElementById("upload-doc-chunk-size"),
+  uploadDocCharSize: document.getElementById("upload-doc-char-size"),
+  uploadDocTokenSizeGroup: document.getElementById("upload-doc-token-size-group"),
+  uploadDocCharSizeGroup: document.getElementById("upload-doc-char-size-group"),
+  chatKbSelect: document.getElementById("chat-kb-select"),
   chatModel: document.getElementById("chat-model"),
+  chatQueryRewrite: document.getElementById("chat-query-rewrite"),
   newChatSession: document.getElementById("new-chat-session"),
   chatTranscript: document.getElementById("chat-transcript"),
   chatMessageForm: document.getElementById("chat-message-form"),
   chunkModal: document.getElementById("chunk-modal"),
   chunkModalBackdrop: document.getElementById("chunk-modal-backdrop"),
   chunkModalClose: document.getElementById("chunk-modal-close"),
-  previewModalKicker: document.getElementById("preview-modal-kicker"),
   chunkModalTitle: document.getElementById("chunk-modal-title"),
   chunkModalBody: document.getElementById("chunk-modal-body"),
+  kbModal: document.getElementById("kb-modal"),
+  uploadModal: document.getElementById("upload-modal"),
+  statusModal: document.getElementById("status-modal"),
+  statusModalMessage: document.getElementById("status-modal-message"),
+  confirmModal: document.getElementById("confirm-modal"),
+  confirmModalMessage: document.getElementById("confirm-modal-message"),
+  confirmModalOk: document.getElementById("confirm-modal-ok"),
+  confirmModalCancel: document.getElementById("confirm-modal-cancel"),
 };
 
 function showFeedback(message, variant = "success") {
-  els.feedback.textContent = message;
-  els.feedback.className = `feedback ${variant}`;
+  if (state.statusTimer) {
+    window.clearTimeout(state.statusTimer);
+  }
+  els.statusModalMessage.textContent = message;
+  els.statusModal.className = `status-modal ${variant}`;
+  els.statusModal.classList.remove("hidden");
+  els.statusModal.setAttribute("aria-hidden", "false");
+  state.statusTimer = window.setTimeout(() => {
+    clearFeedback();
+  }, 2200);
 }
 
 function clearFeedback() {
-  els.feedback.textContent = "";
-  els.feedback.className = "feedback hidden";
+  if (state.statusTimer) {
+    window.clearTimeout(state.statusTimer);
+    state.statusTimer = null;
+  }
+  els.statusModal.className = "status-modal hidden";
+  els.statusModal.setAttribute("aria-hidden", "true");
 }
 
 function escapeHtml(value) {
@@ -92,14 +117,14 @@ function currentKnowledgeBase() {
 
 function renderHeaderContext() {
   const kb = currentKnowledgeBase();
-  const label = kb ? kb.vector_db_name || kb.identifier : "尚未选择";
+  const label = kb ? kb.vector_db_name || kb.identifier : "未选择";
   els.currentKbLabel.textContent = label;
-  els.chatKbSummary.textContent = label;
 }
 
 function fillModelSelects() {
   const embeddingModels = state.bootstrap?.embedding_models || [];
   const chatModels = state.bootstrap?.chat_models || [];
+  const knowledgeBases = state.bootstrap?.knowledge_bases || [];
 
   els.kbEmbeddingModel.innerHTML = embeddingModels
     .map(
@@ -116,6 +141,17 @@ function fillModelSelects() {
         `<option value="${modelId}" ${modelId === state.bootstrap.default_chat_model_id ? "selected" : ""}>${modelId}</option>`,
     )
     .join("");
+
+  els.chatQueryRewrite.checked = Boolean(state.bootstrap?.default_query_rewrite);
+
+  els.chatKbSelect.innerHTML = knowledgeBases.length
+    ? knowledgeBases
+        .map((kb) => {
+          const selected = kb.identifier === state.selectedKbId ? "selected" : "";
+          return `<option value="${kb.identifier}" ${selected}>${escapeHtml(kb.vector_db_name || kb.identifier)}</option>`;
+        })
+        .join("")
+    : '<option value="">暂无知识库</option>';
 }
 
 function setActiveTab(tabId) {
@@ -138,18 +174,17 @@ function renderKnowledgeBases() {
   els.kbList.innerHTML = items
     .map((kb) => {
       const active = kb.identifier === state.selectedKbId ? "active" : "";
+      const name = kb.vector_db_name || kb.identifier;
       return `
-        <div class="list-item ${active}">
-          <div class="list-item-header">
-            <div>
-              <strong>${kb.vector_db_name || kb.identifier}</strong>
-              <div class="document-meta">${kb.identifier}</div>
-              <div class="document-meta">${kb.embedding_model} · ${kb.provider_id}</div>
-            </div>
-            <div class="list-actions">
-              <button class="mini-button" data-action="select-kb" data-id="${kb.identifier}">选中</button>
-              <button class="mini-button" data-action="delete-kb" data-id="${kb.identifier}">删除</button>
-            </div>
+        <div class="list-item kb-item ${active}" data-kb-id="${kb.identifier}">
+          <button class="kb-row" type="button" data-action="select-kb" data-id="${kb.identifier}">
+            <strong class="kb-name">${escapeHtml(name)}</strong>
+            ${active ? '<span class="kb-active-dot" aria-hidden="true"></span>' : ""}
+          </button>
+          <div class="list-actions">
+            <button class="icon-button danger-button" type="button" data-action="delete-kb" data-id="${kb.identifier}" title="删除知识库" aria-label="删除知识库">
+              删除
+            </button>
           </div>
         </div>
       `;
@@ -175,12 +210,11 @@ function renderDocuments(target, documents) {
           <div class="list-item-header">
             <div>
               <strong>${doc.title}</strong>
-              <div class="document-meta">${doc.document_id}</div>
               <div class="document-meta">${doc.source_type} · ${doc.mime_type || "未知类型"}</div>
             </div>
             <div class="list-actions">
               <button class="mini-button" data-action="view-chunks" data-document-id="${doc.document_id}" data-document-title="${doc.title}">查看分块</button>
-              <button class="mini-button danger-button" data-action="delete-document" data-document-id="${doc.document_id}" data-document-title="${doc.title}">删除文件</button>
+              <button class="mini-button danger-button" data-action="delete-document" data-document-id="${doc.document_id}" data-document-title="${doc.title}">删除</button>
             </div>
           </div>
         </div>
@@ -199,8 +233,19 @@ function closeChunkModal() {
   els.chunkModal.setAttribute("aria-hidden", "true");
 }
 
-function openPreviewModal({ kicker, title, body }) {
-  els.previewModalKicker.textContent = kicker;
+function openModal(modal) {
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeModal(modal) {
+  if (!modal) return;
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+function openPreviewModal({ title, body }) {
   els.chunkModalTitle.textContent = title;
   els.chunkModalBody.innerHTML = body;
   openChunkModal();
@@ -210,7 +255,6 @@ function renderDocumentChunks(chunks) {
   const empty = `<div class="empty-state">没有可展示的分块。若这是较早导入的旧文档，需要重新导入一次，系统才会记录 chunk 明细。</div>`;
   if (!chunks.length) {
     openPreviewModal({
-      kicker: "分块预览",
       title: state.selectedDocumentTitle ? `文档：${state.selectedDocumentTitle}` : "查看切块结果",
       body: empty,
     });
@@ -233,9 +277,8 @@ function renderDocumentChunks(chunks) {
     .join("");
 
   openPreviewModal({
-    kicker: "分块预览",
-    title: state.selectedDocumentTitle ? `文档：${state.selectedDocumentTitle}` : "查看切块结果",
-    body: html,
+      title: state.selectedDocumentTitle ? `文档：${state.selectedDocumentTitle}` : "查看切块结果",
+      body: html,
   });
 }
 
@@ -252,7 +295,6 @@ async function getDocumentChunks(documentId, documentTitle) {
 async function loadDocuments() {
   if (!state.selectedKbId) {
     renderDocuments(els.knowledgeDocumentList, []);
-    renderDocuments(els.fileDocumentList, []);
     state.selectedDocumentId = null;
     state.selectedDocumentTitle = null;
     return;
@@ -260,7 +302,6 @@ async function loadDocuments() {
 
   const documents = await api(`/api/knowledge-bases/${state.selectedKbId}/documents`);
   renderDocuments(els.knowledgeDocumentList, documents);
-  renderDocuments(els.fileDocumentList, documents);
   if (state.selectedDocumentId && !documents.some((doc) => doc.document_id === state.selectedDocumentId)) {
     state.selectedDocumentId = null;
     state.selectedDocumentTitle = null;
@@ -270,7 +311,7 @@ async function loadDocuments() {
 function renderChatTranscript(entries) {
   els.chatTranscript.dataset.entries = JSON.stringify(entries);
   if (!entries.length) {
-    els.chatTranscript.innerHTML = `<div class="empty-state">先创建会话，再开始提问。</div>`;
+    els.chatTranscript.innerHTML = `<div class="empty-state">选择知识库后直接提问。首次发送会自动创建对话上下文。</div>`;
     return;
   }
 
@@ -279,10 +320,11 @@ function renderChatTranscript(entries) {
       (entry) => `
         <div class="chat-bubble ${entry.role}">
           <p class="chat-role">${entry.role === "user" ? "用户" : "助手"}</p>
-          <div>${formatRichText(entry.content)}</div>
+          <div class="chat-answer">${formatRichText(entry.content)}</div>
           ${
             entry.citations?.length
               ? `<div class="citations">
+                  <div class="citation-section-title">引用段落</div>
                   ${entry.citations
                     .map(
                       (citation) => `
@@ -324,6 +366,9 @@ async function refreshBootstrap() {
   renderKnowledgeBases();
   renderHeaderContext();
   await loadDocuments();
+  if (els.chatKbSelect.value !== (state.selectedKbId || "")) {
+    els.chatKbSelect.value = state.selectedKbId || "";
+  }
 }
 
 function requireKbSelection() {
@@ -332,17 +377,92 @@ function requireKbSelection() {
   }
 }
 
+function resetChatSession(clearTranscript = true) {
+  state.chatSessionId = null;
+  state.chatSessionKbId = null;
+  if (clearTranscript) {
+    renderChatTranscript([]);
+  }
+}
+
+function updateUploadChunkControls() {
+  const strategy = els.uploadDocStrategy.value;
+  const showTokenSize = strategy === "fixed_tokens" || strategy === "recursive";
+  const showCharSize = strategy === "fixed_chars" || strategy === "recursive";
+  els.uploadDocTokenSizeGroup.classList.toggle("hidden", !showTokenSize);
+  els.uploadDocCharSizeGroup.classList.toggle("hidden", !showCharSize);
+}
+
+function currentChatConfig() {
+  requireKbSelection();
+  return {
+    vector_db_id: state.selectedKbId,
+    model_id: document.getElementById("chat-model").value,
+    instructions: document.getElementById("chat-instructions").value,
+    mode: document.getElementById("chat-mode").value,
+    query_rewrite: els.chatQueryRewrite.checked,
+    max_chunks: Number(document.getElementById("chat-max-chunks").value),
+    ranker_type: document.getElementById("chat-ranker").value,
+    alpha: Number(document.getElementById("chat-alpha").value),
+    impact_factor: Number(document.getElementById("chat-impact").value),
+  };
+}
+
+async function ensureChatSession() {
+  const config = currentChatConfig();
+  if (state.chatSessionId && state.chatSessionKbId === config.vector_db_id) {
+    return state.chatSessionId;
+  }
+
+  const session = await api("/api/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+  state.chatSessionId = session.session_id;
+  state.chatSessionKbId = config.vector_db_id;
+  renderChatTranscript([]);
+  return session.session_id;
+}
+
+function confirmAction(message) {
+  return new Promise((resolve) => {
+    els.confirmModalMessage.textContent = message;
+    openModal(els.confirmModal);
+
+    const cleanup = () => {
+      els.confirmModalOk.removeEventListener("click", onOk);
+      els.confirmModalCancel.removeEventListener("click", onCancel);
+      closeModal(els.confirmModal);
+    };
+
+    const onOk = () => {
+      cleanup();
+      resolve(true);
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    els.confirmModalOk.addEventListener("click", onOk, { once: true });
+    els.confirmModalCancel.addEventListener("click", onCancel, { once: true });
+  });
+}
+
 document.querySelectorAll(".tab-button").forEach((button) => {
   button.addEventListener("click", () => setActiveTab(button.dataset.tab));
 });
 
-els.refreshBootstrap.addEventListener("click", async () => {
-  try {
-    await refreshBootstrap();
-    showFeedback("状态已刷新。");
-  } catch (error) {
-    showFeedback(error.message, "error");
-  }
+els.openKbModal?.addEventListener("click", () => openModal(els.kbModal));
+els.openUploadModal?.addEventListener("click", () => openModal(els.uploadModal));
+
+document.querySelectorAll("[data-close-modal]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const modalId = button.getAttribute("data-close-modal");
+    if (!modalId) return;
+    closeModal(document.getElementById(modalId));
+  });
 });
 
 els.kbForm.addEventListener("submit", async (event) => {
@@ -363,8 +483,9 @@ els.kbForm.addEventListener("submit", async (event) => {
     renderHeaderContext();
     await loadDocuments();
     els.kbForm.reset();
+    closeModal(els.kbModal);
     fillModelSelects();
-    showFeedback(`知识库 ${kb.identifier} 已创建。`);
+    showFeedback(`已创建知识库：${kb.vector_db_name || kb.identifier}`);
   } catch (error) {
     showFeedback(error.message, "error");
   }
@@ -381,22 +502,28 @@ els.kbList.addEventListener("click", async (event) => {
   try {
     if (action === "select-kb") {
       state.selectedKbId = id;
-      state.chatSessionId = null;
+      resetChatSession();
       renderKnowledgeBases();
       renderHeaderContext();
       await loadDocuments();
-      showFeedback(`已切换到 ${id}。`);
+      if (els.chatKbSelect.value !== id) {
+        els.chatKbSelect.value = id;
+      }
       return;
     }
 
     if (action === "delete-kb") {
+      const confirmed = await confirmAction(`确认删除知识库 ${id}？该知识库下的文件记录也会一起移除。`);
+      if (!confirmed) {
+        return;
+      }
       await api(`/api/knowledge-bases/${id}`, { method: "DELETE" });
       if (state.selectedKbId === id) {
         state.selectedKbId = null;
-        state.chatSessionId = null;
+        resetChatSession();
       }
       await refreshBootstrap();
-      showFeedback(`已删除 ${id}。`);
+      showFeedback(`已删除知识库：${id}`);
     }
   } catch (error) {
     showFeedback(error.message, "error");
@@ -416,12 +543,11 @@ function wireDocumentListClick(container) {
       if (action === "view-chunks") {
         const chunks = await getDocumentChunks(documentId, documentTitle);
         renderDocumentChunks(chunks);
-        showFeedback(`已加载文档 ${documentTitle} 的分块结果。`);
         return;
       }
 
       if (action === "delete-document") {
-        const confirmed = window.confirm(`删除文件后将同时移除对应分块和检索内容：${documentTitle}`);
+        const confirmed = await confirmAction(`确认删除文件 ${documentTitle}？对应分块和检索内容会一起移除。`);
         if (!confirmed) {
           return;
         }
@@ -435,7 +561,7 @@ function wireDocumentListClick(container) {
           closeChunkModal();
         }
         await loadDocuments();
-        showFeedback(`已删除文件 ${documentTitle}。`);
+        showFeedback(`已删除文件：${documentTitle}`);
       }
     } catch (error) {
       showFeedback(error.message, "error");
@@ -444,7 +570,6 @@ function wireDocumentListClick(container) {
 }
 
 wireDocumentListClick(els.knowledgeDocumentList);
-wireDocumentListClick(els.fileDocumentList);
 
 els.chunkModalClose.addEventListener("click", closeChunkModal);
 els.chunkModalBackdrop.addEventListener("click", closeChunkModal);
@@ -458,7 +583,9 @@ els.uploadDocForm.addEventListener("submit", async (event) => {
 
     showFeedback("文件已选中，正在上传并交给 MinerU 解析……");
     const formData = new FormData();
-    formData.append("chunk_size_in_tokens", document.getElementById("upload-doc-chunk-size").value);
+    formData.append("chunking_strategy", els.uploadDocStrategy.value);
+    formData.append("chunk_size_in_tokens", els.uploadDocChunkSize.value);
+    formData.append("chunk_size_in_chars", els.uploadDocCharSize.value);
     for (const file of files) {
       formData.append("files", file);
     }
@@ -469,6 +596,8 @@ els.uploadDocForm.addEventListener("submit", async (event) => {
     await loadDocuments();
     els.uploadDocForm.reset();
     els.uploadDocSelection.textContent = "尚未选择文件";
+    updateUploadChunkControls();
+    closeModal(els.uploadModal);
     showFeedback("文件已导入。");
   } catch (error) {
     showFeedback(error.message, "error");
@@ -479,6 +608,8 @@ els.uploadDocTrigger.addEventListener("click", () => {
   els.uploadDocFiles.click();
 });
 
+els.uploadDocStrategy.addEventListener("change", updateUploadChunkControls);
+
 els.uploadDocFiles.addEventListener("change", () => {
   const files = Array.from(els.uploadDocFiles.files || []);
   if (!files.length) {
@@ -487,57 +618,52 @@ els.uploadDocFiles.addEventListener("change", () => {
   }
   if (files.length === 1) {
     els.uploadDocSelection.textContent = files[0].name;
-    showFeedback(`已选择文件：${files[0].name}`);
     return;
   }
   els.uploadDocSelection.textContent = `已选择 ${files.length} 个文件`;
-  showFeedback(`已选择 ${files.length} 个文件`);
-});
-
-els.chatConfigForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try {
-    requireKbSelection();
-    const session = await api("/api/chat/sessions", {
-      method: "POST",
-      body: JSON.stringify({
-        vector_db_id: state.selectedKbId,
-        model_id: document.getElementById("chat-model").value,
-        instructions: document.getElementById("chat-instructions").value,
-        mode: document.getElementById("chat-mode").value,
-        max_chunks: Number(document.getElementById("chat-max-chunks").value),
-        ranker_type: document.getElementById("chat-ranker").value,
-        alpha: Number(document.getElementById("chat-alpha").value),
-        impact_factor: Number(document.getElementById("chat-impact").value),
-      }),
-    });
-    state.chatSessionId = session.session_id;
-    renderChatTranscript([]);
-    setActiveTab("chat");
-    showFeedback(`会话 ${session.session_id} 已创建。`);
-  } catch (error) {
-    showFeedback(error.message, "error");
-  }
 });
 
 els.newChatSession.addEventListener("click", () => {
-  state.chatSessionId = null;
-  renderChatTranscript([]);
-  showFeedback("当前会话已清空。");
+  resetChatSession();
+});
+
+els.chatKbSelect.addEventListener("change", async () => {
+  const nextKbId = els.chatKbSelect.value || null;
+  if (nextKbId === state.selectedKbId) {
+    return;
+  }
+  state.selectedKbId = nextKbId;
+  resetChatSession();
+  renderKnowledgeBases();
+  renderHeaderContext();
+  await loadDocuments();
+});
+
+[
+  document.getElementById("chat-model"),
+  document.getElementById("chat-instructions"),
+  document.getElementById("chat-mode"),
+  document.getElementById("chat-max-chunks"),
+  document.getElementById("chat-ranker"),
+  document.getElementById("chat-alpha"),
+  document.getElementById("chat-impact"),
+  document.getElementById("chat-query-rewrite"),
+].forEach((element) => {
+  element.addEventListener("change", () => {
+    resetChatSession();
+  });
 });
 
 els.chatMessageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    if (!state.chatSessionId) {
-      throw new Error("请先创建对话会话");
-    }
+    const sessionId = await ensureChatSession();
     const message = document.getElementById("chat-message").value;
     const entries = els.chatTranscript.dataset.entries ? JSON.parse(els.chatTranscript.dataset.entries) : [];
     entries.push({ role: "user", content: message });
     renderChatTranscript(entries);
 
-    const response = await api(`/api/chat/sessions/${state.chatSessionId}/messages`, {
+    const response = await api(`/api/chat/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify({ message }),
     });
@@ -554,6 +680,7 @@ window.addEventListener("load", async () => {
   try {
     setActiveTab("knowledge");
     await refreshBootstrap();
+    updateUploadChunkControls();
     renderChatTranscript([]);
   } catch (error) {
     showFeedback(error.message, "error");

@@ -21,6 +21,7 @@ from .schemas import (
     BootstrapResponse,
     ChatMessageResponse,
     ChatSessionInfo,
+    ChunkingStrategy,
     ChunkResult,
     CitationInfo,
     CreateChatSessionRequest,
@@ -109,6 +110,14 @@ def _extract_citation_indices(answer: str, max_index: int) -> list[int]:
     return indices
 
 
+def _normalize_chunking_strategy(value: str | None) -> ChunkingStrategy:
+    allowed: set[str] = {"mineru_markdown", "fixed_tokens", "fixed_chars", "recursive"}
+    normalized = (value or "").strip().lower()
+    if normalized not in allowed:
+        raise ValueError(f"Unsupported chunking strategy: {value}")
+    return normalized  # type: ignore[return-value]
+
+
 def _chunk_plain_text(value: str, chunk_size_in_tokens: int) -> list[str]:
     normalized = " ".join(value.split()).strip()
     if not normalized:
@@ -124,6 +133,21 @@ def _chunk_plain_text(value: str, chunk_size_in_tokens: int) -> list[str]:
         chunk = " ".join(words[index : index + step]).strip()
         if chunk:
             chunks.append(chunk)
+    return chunks
+
+
+def _chunk_fixed_chars(value: str, chunk_size_in_chars: int) -> list[str]:
+    normalized = value.strip()
+    if not normalized:
+        return []
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(normalized):
+        chunk = normalized[start : start + chunk_size_in_chars].strip()
+        if chunk:
+            chunks.append(chunk)
+        start += chunk_size_in_chars
     return chunks
 
 
@@ -197,10 +221,79 @@ def _chunk_markdown(value: str, chunk_size_in_tokens: int) -> list[str]:
     return [chunk for chunk in chunks if chunk]
 
 
-def _chunk_document_content(document: "PreparedDocument", chunk_size_in_tokens: int) -> list[str]:
-    if document.mime_type == "text/markdown" and document.metadata.get("mineru_backend") == "api":
-        return _chunk_markdown(document.content, chunk_size_in_tokens)
-    return _chunk_plain_text(document.content, chunk_size_in_tokens)
+def _split_recursive_blocks(value: str) -> list[str]:
+    normalized = value.strip()
+    if not normalized:
+        return []
+
+    paragraph_blocks = [part.strip() for part in re.split(r"\n\s*\n", normalized) if part.strip()]
+    if len(paragraph_blocks) > 1:
+        return paragraph_blocks
+
+    sentence_blocks = [part.strip() for part in re.split(r"(?<=[。！？!?\.])\s+", normalized) if part.strip()]
+    if len(sentence_blocks) > 1:
+        return sentence_blocks
+
+    return [normalized]
+
+
+def _chunk_recursive(value: str, chunk_size_in_tokens: int, chunk_size_in_chars: int) -> list[str]:
+    blocks = _split_markdown_blocks(value) if "#" in value else _split_recursive_blocks(value)
+    if not blocks:
+        return _chunk_plain_text(value, chunk_size_in_tokens)
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_units = 0
+
+    for block in blocks:
+        block_units = _estimate_chunk_units(block)
+        if block_units > chunk_size_in_tokens or len(block) > chunk_size_in_chars:
+            if current:
+                chunks.append("\n\n".join(current).strip())
+                current = []
+                current_units = 0
+            if len(block) > chunk_size_in_chars:
+                chunks.extend(_chunk_fixed_chars(block, chunk_size_in_chars))
+            else:
+                chunks.extend(_chunk_plain_text(block, chunk_size_in_tokens))
+            continue
+
+        if current and current_units + block_units > chunk_size_in_tokens:
+            chunks.append("\n\n".join(current).strip())
+            current = [block]
+            current_units = block_units
+            continue
+
+        current.append(block)
+        current_units += block_units
+
+    if current:
+        chunks.append("\n\n".join(current).strip())
+
+    return [chunk for chunk in chunks if chunk]
+
+
+def _chunk_document_content(
+    document: "PreparedDocument",
+    chunking_strategy: ChunkingStrategy,
+    chunk_size_in_tokens: int,
+    chunk_size_in_chars: int,
+) -> tuple[list[str], str]:
+    is_mineru_markdown = document.mime_type == "text/markdown" and document.metadata.get("mineru_backend") == "api"
+
+    if chunking_strategy == "mineru_markdown":
+        if is_mineru_markdown:
+            return _chunk_markdown(document.content, chunk_size_in_tokens), "mineru_markdown"
+        return _chunk_recursive(document.content, chunk_size_in_tokens, chunk_size_in_chars), "recursive"
+
+    if chunking_strategy == "fixed_chars":
+        return _chunk_fixed_chars(document.content, chunk_size_in_chars), "fixed_chars"
+
+    if chunking_strategy == "recursive":
+        return _chunk_recursive(document.content, chunk_size_in_tokens, chunk_size_in_chars), "recursive"
+
+    return _chunk_plain_text(document.content, chunk_size_in_tokens), "fixed_tokens"
 
 
 def _coerce_openai_content(content: Any) -> str:
@@ -309,6 +402,29 @@ class OpenAICompatibleClient:
             raise ValueError("OpenAI-compatible API returned no choices")
         message = choices[0].get("message", {})
         return _coerce_openai_content(message.get("content")).strip()
+
+    def rewrite_query(self, model_id: str, query: str) -> str:
+        prompt = (
+            "Rewrite the user's query into one concise retrieval query.\n"
+            "Rules:\n"
+            "- Preserve the original intent.\n"
+            "- Keep named entities, product names, versions, and technical terms.\n"
+            "- Do not answer the question.\n"
+            "- Do not output multiple queries.\n"
+            "- Output only the rewritten query.\n\n"
+            f"User query:\n{query}"
+        )
+        rewritten = self.chat_completion(
+            model_id,
+            [
+                {
+                    "role": "system",
+                    "content": "You rewrite user questions for retrieval. Output only one rewritten query.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        ).strip()
+        return rewritten or query
 
 
 class MinerUClient:
@@ -656,16 +772,34 @@ class AppGateway:
             )
         return chunks
 
+    def _rewrite_query_if_enabled(self, model_id: str | None, query: str, enabled: bool) -> str:
+        if not enabled:
+            return query
+        active_model_id = model_id or self.settings.openai_model or self.bootstrap().default_chat_model_id
+        if not active_model_id:
+            return query
+        try:
+            return self.openai_client.rewrite_query(active_model_id, query)
+        except Exception:
+            return query
+
     def _ingest_prepared_documents(
         self,
         vector_db_id: str,
         prepared_documents: list[PreparedDocument],
+        chunking_strategy: ChunkingStrategy,
         chunk_size_in_tokens: int,
+        chunk_size_in_chars: int,
     ) -> list[DocumentInfo]:
         chunks: list[dict[str, Any]] = []
         chunks_by_document: dict[str, list[DocumentChunkInfo]] = {}
         for document in prepared_documents:
-            text_chunks = _chunk_document_content(document, chunk_size_in_tokens)
+            text_chunks, effective_chunking_strategy = _chunk_document_content(
+                document,
+                chunking_strategy,
+                chunk_size_in_tokens,
+                chunk_size_in_chars,
+            )
             document_chunks: list[DocumentChunkInfo] = []
             for index, chunk_content in enumerate(text_chunks):
                 chunk_metadata = {
@@ -675,9 +809,8 @@ class AppGateway:
                     "source_type": document.source_type,
                     "source_value": document.source_value,
                     "chunk_index": index,
-                    "chunking_strategy": "mineru_markdown"
-                    if document.mime_type == "text/markdown" and document.metadata.get("mineru_backend") == "api"
-                    else "plain_text",
+                    "chunking_strategy": effective_chunking_strategy,
+                    "requested_chunking_strategy": chunking_strategy,
                     **document.metadata,
                 }
                 chunk_id = f"{document.document_id}-chunk-{index}"
@@ -772,6 +905,7 @@ class AppGateway:
             openai_base_url=self.settings.openai_base_url,
             mineru_base_url=self.settings.mineru_base_url,
             default_provider_id=self.settings.default_provider_id,
+            default_query_rewrite=self.settings.default_query_rewrite,
             default_chat_model_id=default_chat_model_id,
             default_embedding_model_id=default_embedding_model_id,
             embedding_models=embedding_models,
@@ -879,7 +1013,15 @@ class AppGateway:
     def list_document_chunks(self, vector_db_id: str, document_id: str) -> list[DocumentChunkInfo]:
         return self.catalog.list_document_chunks(vector_db_id, document_id)
 
-    def ingest_text_documents(self, vector_db_id: str, inputs: list[TextDocumentInput], chunk_size_in_tokens: int) -> list[DocumentInfo]:
+    def ingest_text_documents(
+        self,
+        vector_db_id: str,
+        inputs: list[TextDocumentInput],
+        chunking_strategy: ChunkingStrategy,
+        chunk_size_in_tokens: int,
+        chunk_size_in_chars: int,
+    ) -> list[DocumentInfo]:
+        chunking_strategy = _normalize_chunking_strategy(chunking_strategy)
         prepared_documents = [
             PreparedDocument(
                 document_id=item.document_id or f"doc_{uuid4().hex[:10]}",
@@ -892,20 +1034,59 @@ class AppGateway:
             )
             for item in inputs
         ]
-        return self._ingest_prepared_documents(vector_db_id, prepared_documents, chunk_size_in_tokens)
+        return self._ingest_prepared_documents(
+            vector_db_id,
+            prepared_documents,
+            chunking_strategy,
+            chunk_size_in_tokens,
+            chunk_size_in_chars,
+        )
 
-    def ingest_urls(self, vector_db_id: str, urls: list[str], chunk_size_in_tokens: int) -> list[DocumentInfo]:
+    def ingest_urls(
+        self,
+        vector_db_id: str,
+        urls: list[str],
+        chunking_strategy: ChunkingStrategy,
+        chunk_size_in_tokens: int,
+        chunk_size_in_chars: int,
+    ) -> list[DocumentInfo]:
+        chunking_strategy = _normalize_chunking_strategy(chunking_strategy)
         prepared_documents = self.mineru_client.extract_urls(urls)
-        return self._ingest_prepared_documents(vector_db_id, prepared_documents, chunk_size_in_tokens)
+        return self._ingest_prepared_documents(
+            vector_db_id,
+            prepared_documents,
+            chunking_strategy,
+            chunk_size_in_tokens,
+            chunk_size_in_chars,
+        )
 
-    def ingest_uploads(self, vector_db_id: str, files: list[UploadFile], chunk_size_in_tokens: int) -> list[DocumentInfo]:
+    def ingest_uploads(
+        self,
+        vector_db_id: str,
+        files: list[UploadFile],
+        chunking_strategy: ChunkingStrategy,
+        chunk_size_in_tokens: int,
+        chunk_size_in_chars: int,
+    ) -> list[DocumentInfo]:
+        chunking_strategy = _normalize_chunking_strategy(chunking_strategy)
         prepared_documents = self.mineru_client.extract_uploads(files)
-        return self._ingest_prepared_documents(vector_db_id, prepared_documents, chunk_size_in_tokens)
+        return self._ingest_prepared_documents(
+            vector_db_id,
+            prepared_documents,
+            chunking_strategy,
+            chunk_size_in_tokens,
+            chunk_size_in_chars,
+        )
 
     def retrieve(self, request: RetrievalRequest) -> RetrievalResponse:
+        rewritten_query = self._rewrite_query_if_enabled(
+            self.settings.openai_model or self.bootstrap().default_chat_model_id,
+            request.query,
+            request.query_rewrite,
+        )
         chunks = self._query_chunks(
             vector_db_id=request.vector_db_id,
-            query=request.query,
+            query=rewritten_query,
             mode=request.mode,
             max_chunks=request.max_chunks,
             ranker_type=request.ranker_type,
@@ -929,6 +1110,7 @@ class AppGateway:
             vector_db_id=request.vector_db_id,
             model_id=model_id,
             mode=self._normalize_mode_for_provider(self._provider_id_for_vector_db(request.vector_db_id), request.mode),
+            query_rewrite=request.query_rewrite,
             max_chunks=request.max_chunks,
             ranker_type=request.ranker_type,
         )
@@ -947,7 +1129,7 @@ class AppGateway:
 
         chunks = self._query_chunks(
             vector_db_id=state.config.vector_db_id,
-            query=message,
+            query=self._rewrite_query_if_enabled(state.config.model_id, message, state.config.query_rewrite),
             mode=state.config.mode,
             max_chunks=state.config.max_chunks,
             ranker_type=state.config.ranker_type,

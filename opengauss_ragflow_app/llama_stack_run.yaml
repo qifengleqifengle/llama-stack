@@ -25,7 +25,7 @@ providers:
       user: ${env.PGVECTOR_USER:=postgres}
       password: ${env.PGVECTOR_PASSWORD:=}
       connect_timeout: ${env.PGVECTOR_CONNECT_TIMEOUT:=5}
-      fts_config: ${env.PGVECTOR_FTS_CONFIG:=english}
+      fts_config: ${env.PGVECTOR_FTS_CONFIG:=simple}
       kvstore:
         type: sqlite
         db_path: ${env.SQLITE_STORE_DIR:=~/.llama/distributions/opengauss-add}/pgvector_registry.db

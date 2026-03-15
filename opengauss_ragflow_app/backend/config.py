@@ -61,6 +61,7 @@ class AppSettings(BaseModel):
     default_retrieval_k: int = Field(default=6, ge=1, le=20)
     default_chat_k: int = Field(default=5, ge=1, le=20)
     default_mode: str = Field(default="hybrid")
+    default_query_rewrite: bool = Field(default=False)
     default_ranker: str = Field(default="rrf")
     default_ranker_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
     default_ranker_impact_factor: float = Field(default=60.0, gt=0.0)
@@ -100,6 +101,7 @@ def load_settings() -> AppSettings:
         default_retrieval_k=_env_int("OPENGAUSS_RAGFLOW_DEFAULT_RETRIEVAL_K", 6),
         default_chat_k=_env_int("OPENGAUSS_RAGFLOW_DEFAULT_CHAT_K", 5),
         default_mode=_env_str("OPENGAUSS_RAGFLOW_DEFAULT_MODE", "hybrid") or "hybrid",
+        default_query_rewrite=_env_bool("OPENGAUSS_RAGFLOW_DEFAULT_QUERY_REWRITE", False),
         default_ranker=_env_str("OPENGAUSS_RAGFLOW_DEFAULT_RANKER", "rrf") or "rrf",
         default_ranker_alpha=_env_float("OPENGAUSS_RAGFLOW_DEFAULT_RANKER_ALPHA", 0.6),
         default_ranker_impact_factor=_env_float("OPENGAUSS_RAGFLOW_DEFAULT_RANKER_IMPACT_FACTOR", 60.0),

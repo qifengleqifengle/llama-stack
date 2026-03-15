@@ -115,6 +115,10 @@ def _make_regconfig_literal(name: str) -> str:
     return f"'{name}'"
 
 
+def _contains_cjk(value: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", value or ""))
+
+
 def check_extension_version(cur):
     cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
     result = cur.fetchone()
@@ -258,6 +262,32 @@ class PGVectorIndex(EmbeddingIndex):
                 (query_string, query_string, k),
             )
             results = cur.fetchall()
+
+            if not results and _contains_cjk(query_string):
+                cur.execute(
+                    f"""
+                    SELECT document,
+                           (
+                               CASE
+                                   WHEN position(lower(%s) in lower(coalesce(content, ''))) > 0
+                                   THEN 1.0 / position(lower(%s) in lower(coalesce(content, '')))
+                                   ELSE 0.0
+                               END
+                           ) +
+                           (
+                               (
+                                   length(lower(coalesce(content, '')))
+                                   - length(replace(lower(coalesce(content, '')), lower(%s), ''))
+                               ) / GREATEST(length(%s), 1)
+                           ) AS score
+                    FROM {self.table_name}
+                    WHERE lower(coalesce(content, '')) LIKE '%%' || lower(%s) || '%%'
+                    ORDER BY score DESC
+                    LIMIT %s
+                    """,
+                    (query_string, query_string, query_string, query_string, query_string, k),
+                )
+                results = cur.fetchall()
 
         chunks = []
         scores = []

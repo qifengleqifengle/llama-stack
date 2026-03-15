@@ -95,7 +95,13 @@ def delete_document(vector_db_id: str, document_id: str) -> dict[str, str]:
 @app.post("/api/knowledge-bases/{vector_db_id}/documents/text", response_model=list[DocumentInfo])
 def ingest_text_documents(vector_db_id: str, request: TextIngestRequest) -> list[DocumentInfo]:
     try:
-        return gateway.ingest_text_documents(vector_db_id, request.documents, request.chunk_size_in_tokens)
+        return gateway.ingest_text_documents(
+            vector_db_id,
+            request.documents,
+            request.chunking_strategy,
+            request.chunk_size_in_tokens,
+            request.chunk_size_in_chars,
+        )
     except Exception as exc:  # pragma: no cover - depends on external server
         raise _as_http_error(exc) from exc
 
@@ -103,7 +109,13 @@ def ingest_text_documents(vector_db_id: str, request: TextIngestRequest) -> list
 @app.post("/api/knowledge-bases/{vector_db_id}/documents/url", response_model=list[DocumentInfo])
 def ingest_url_documents(vector_db_id: str, request: UrlIngestRequest) -> list[DocumentInfo]:
     try:
-        return gateway.ingest_urls(vector_db_id, request.urls, request.chunk_size_in_tokens)
+        return gateway.ingest_urls(
+            vector_db_id,
+            request.urls,
+            request.chunking_strategy,
+            request.chunk_size_in_tokens,
+            request.chunk_size_in_chars,
+        )
     except Exception as exc:  # pragma: no cover - depends on external server
         raise _as_http_error(exc) from exc
 
@@ -111,11 +123,13 @@ def ingest_url_documents(vector_db_id: str, request: UrlIngestRequest) -> list[D
 @app.post("/api/knowledge-bases/{vector_db_id}/documents/upload", response_model=list[DocumentInfo])
 def ingest_upload_documents(
     vector_db_id: str,
+    chunking_strategy: str = "mineru_markdown",
     chunk_size_in_tokens: int = 512,
+    chunk_size_in_chars: int = 1200,
     files: list[UploadFile] = File(...),
 ) -> list[DocumentInfo]:
     try:
-        return gateway.ingest_uploads(vector_db_id, files, chunk_size_in_tokens)
+        return gateway.ingest_uploads(vector_db_id, files, chunking_strategy, chunk_size_in_tokens, chunk_size_in_chars)
     except Exception as exc:  # pragma: no cover - depends on external server
         raise _as_http_error(exc) from exc
 
